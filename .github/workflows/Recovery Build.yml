@@ -35,6 +35,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 360
     permissions:
       contents: write
 
@@ -72,6 +73,7 @@ jobs:
       run: |
         /tmp/send_msg.sh "🧩 Preparing build environment..."
         DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
+          linux-modules-extra-$(uname -r) \
           git python3 tar aria2 ccache
         curl -L -O "https://gitlab.com/OrangeFox/misc/scripts/-/raw/master/setup/android_build_env.sh"
         sudo bash android_build_env.sh
@@ -138,10 +140,18 @@ jobs:
           exit 1
         fi
 
+    - name: Notify build failure
+      if: failure()
+      run: /tmp/send_msg.sh "❌ Build failed for \`${{ env.DEVICE_NAME }}\` (\`${{ env.MANIFEST_BRANCH }}\`)\n🔗 [Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+    - name: Check the output directory
+      run: ls -l "fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/"
+
     - name: Upload to release
       uses: softprops/action-gh-release@v3
       with:
         files: |
+          fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/recovery.img
           fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox-R*.img
           fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox-R*.zip
         fail_on_unmatched_files: false
