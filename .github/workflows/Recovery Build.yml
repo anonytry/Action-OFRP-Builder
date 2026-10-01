@@ -4,54 +4,53 @@ on:
   workflow_dispatch:
     inputs:
       device_tree_url:
-        description: "Select Device Tree repository"
+        description: "Device tree repository, for example https://github.com/anonytry/recovery_sky"
         required: true
-        type: choice
-        default: https://github.com/AzzyC/ofox_device_xiaomi_peridot
-        options:
-          - https://github.com/AzzyC/ofox_device_xiaomi_peridot
-          - https://gitlab.com/OrangeFox/device/peridot_new
+        type: string
 
       device_tree_branch:
-        description: "Select Device Tree branch"
+        description: "Device tree branch"
+        required: false
+        default: main
+        type: string
+
+      manifest_branch:
+        description: "OrangeFox manifest branch"
         required: true
-        default: fox_14.1
+        default: 16.0
         type: choice
         options:
-          - fox_14.1
-          - auto-dfe
+          - 16.0
+          - 12.1
 
       notification_mode:
-        description: "Select Telegram notification mode"
+        description: "Telegram notification mode"
         required: true
-        type: choice
         default: quiet
+        type: choice
         options:
           - quiet
           - loud
 
 jobs:
   build:
-    if: github.event.repository.owner.id == github.event.sender.id
     runs-on: ubuntu-24.04
     permissions:
       contents: write
 
     env:
       SYNC_URL: https://gitlab.com/OrangeFox/sync.git
-      MANIFEST_BRANCH: 14.1
+      MANIFEST_BRANCH: ${{ inputs.manifest_branch }}
       DEVICE_TREE_URL: ${{ inputs.device_tree_url }}
       DEVICE_TREE_BRANCH: ${{ inputs.device_tree_branch }}
-      DEVICE_PATH: device/xiaomi/peridot
-      DEVICE_NAME: peridot
-      MAKEFILE_NAME: twrp_peridot-ap2a-eng
+      DEVICE_PATH: device/xiaomi/sky
+      DEVICE_NAME: sky
+      MAKEFILE_NAME: fox_sky-eng
       BUILD_TARGET: recovery
       TELEGRAM_CHAT_ID: ${{ inputs.notification_mode == 'quiet' && '-1002917930475' || '-1001480977582' }}
-      TZ: Europe/London
+      TZ: Asia/Kolkata
 
     steps:
-
-    # Cleanup The Actions Workspace Using Custom Composite Run Actions
     - name: Cleanup
       uses: rokibhasansagar/slimhub_actions@main
 
@@ -59,149 +58,105 @@ jobs:
       run: |
         cat <<'EOF' > /tmp/send_msg.sh
         #!/bin/bash
-        MSG="$(printf "$1")"
         curl -s --fail \
           -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
           -d chat_id="${{ env.TELEGRAM_CHAT_ID }}" \
-          -d text="$MSG" \
+          -d text="$(printf "$1")" \
           -d parse_mode="Markdown" \
           -d disable_web_page_preview=true \
         > /dev/null 2>&1 || true
         EOF
         chmod +x /tmp/send_msg.sh
 
-    - name: Initialize workspace
-      run: |
-        /tmp/send_msg.sh "🚀 *Starting OrangeFox build* for \`${{ env.DEVICE_NAME }}\` (\`${{ env.DEVICE_TREE_BRANCH }}\`)\n🔗 [View Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-        mkdir workspace
-        cd workspace
-        echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
-      id: pwd
-
     - name: Prepare the build environment
       run: |
         /tmp/send_msg.sh "🧩 Preparing build environment..."
         DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
-            linux-modules-extra-$(uname -r) \
-            git python3 tar aria2
+          git python3 tar aria2 ccache
         curl -L -O "https://gitlab.com/OrangeFox/misc/scripts/-/raw/master/setup/android_build_env.sh"
         sudo bash android_build_env.sh
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Install OpenJDK
       uses: actions/setup-java@v6
       with:
         distribution: 'zulu'
-        java-version: '11'
+        java-version: '17'
 
     - name: Sync OrangeFox sources and minimal manifest
       run: |
         /tmp/send_msg.sh "🌐 Syncing OrangeFox sources..."
-        cd ${{ steps.pwd.outputs.workspace-folder }}
-        git clone --depth=1 ${{ env.SYNC_URL }}
+        git clone --depth=1 ${{ env.SYNC_URL }} sync
         cd sync
-        ./orangefox_sync.sh --branch ${{ env.MANIFEST_BRANCH }} --path ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+        ./orangefox_sync.sh --branch ${{ env.MANIFEST_BRANCH }} --path "$GITHUB_WORKSPACE/fox_${{ env.MANIFEST_BRANCH }}"
 
-    - name: Get latest bootable/recovery commit
+    - name: Get bootable/recovery commit
       id: recovery_commit
       run: |
-        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/bootable/recovery
-        RECOVERY_COMMIT=$(git rev-parse --short=7 HEAD)
-        echo "RECOVERY_COMMIT=$RECOVERY_COMMIT" >> $GITHUB_OUTPUT
-        echo "Latest bootable/recovery commit: $RECOVERY_COMMIT"
-        /tmp/send_msg.sh "🔁 bootable/recovery: [${RECOVERY_COMMIT}](https://gitlab.com/OrangeFox/bootable/Recovery/tree/${RECOVERY_COMMIT})"
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+        cd "fox_${{ env.MANIFEST_BRANCH }}/bootable/recovery"
+        COMMIT=$(git rev-parse --short=7 HEAD)
+        echo "commit=$COMMIT" >> $GITHUB_OUTPUT
+        echo "bootable/recovery: $COMMIT"
 
     - name: Clone device tree
       run: |
         /tmp/send_msg.sh "🌲 Cloning device tree for \`${{ env.DEVICE_NAME }}\`..."
-        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}
-        git clone --depth=1 ${{ env.DEVICE_TREE_URL }} -b ${{ env.DEVICE_TREE_BRANCH }} ./${{ env.DEVICE_PATH }}
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+        git clone --depth=1 "${{ env.DEVICE_TREE_URL }}" \
+          -b "${{ env.DEVICE_TREE_BRANCH }}" \
+          "fox_${{ env.MANIFEST_BRANCH }}/${{ env.DEVICE_PATH }}"
 
-    - name: Get latest device tree commit
+    - name: Get device tree commit
       id: devtree_commit
       run: |
-        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/${{ env.DEVICE_PATH }}
-        LATEST_COMMIT=$(git rev-parse --short=7 HEAD)
-        echo "LATEST_COMMIT=$LATEST_COMMIT" >> $GITHUB_OUTPUT
-        echo "Latest device tree commit: $LATEST_COMMIT"
-        /tmp/send_msg.sh "🌲 Device tree: [${LATEST_COMMIT}](${{ env.DEVICE_TREE_URL }}/tree/$LATEST_COMMIT)"
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+        cd "fox_${{ env.MANIFEST_BRANCH }}/${{ env.DEVICE_PATH }}"
+        COMMIT=$(git rev-parse --short=7 HEAD)
+        echo "commit=$COMMIT" >> $GITHUB_OUTPUT
+        echo "device tree: $COMMIT"
 
-    - name: Set Swap Space
+    - name: Set swap space
       uses: pierotofy/set-swap-space@master
       with:
         swap-size-gb: 30
 
     - name: Show system resources
       run: |
-        /tmp/send_msg.sh "📊 Checking runner resources..."
-        echo "CPU cores:"
-        nproc
-        echo
-        echo "Memory:"
-        free -h
-        echo
-        echo "Disk:"
-        df -h
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+        nproc && free -h && df -h
 
-    - name: Building recovery
+    - name: Build recovery
       run: |
         /tmp/send_msg.sh "⚙️ Starting build for \`${{ env.DEVICE_NAME }}\`..."
-        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}
+        cd "fox_${{ env.MANIFEST_BRANCH }}"
 
         set +e
         source build/envsetup.sh
-        export ALLOW_MISSING_DEPENDENCIES=true
         set -e
 
+        export ALLOW_MISSING_DEPENDENCIES=true
         lunch ${{ env.MAKEFILE_NAME }}
 
         if ! mka adbd ${{ env.BUILD_TARGET }}image -j$(nproc --all); then
-          /tmp/send_msg.sh "❌ Build failed for \`${{ env.DEVICE_NAME }}\` (\`${{ env.DEVICE_TREE_BRANCH }}\`)\n🔗 [View Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          /tmp/send_msg.sh "❌ Build failed for \`${{ env.DEVICE_NAME }}\` (\`${{ env.DEVICE_TREE_BRANCH }}\`)\n🔗 [Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           exit 1
         fi
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-    - name: Show system resources post-build
-      run: |
-        /tmp/send_msg.sh "📊 Checking runner resources after build..."
-        echo "CPU cores:"
-        nproc
-        echo
-        echo "Memory:"
-        free -h
-        echo
-        echo "Disk:"
-        df -h
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Upload to Release
+    - name: Upload to release
       uses: softprops/action-gh-release@v3
       with:
         files: |
-          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox-R*.img
-          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox-R*.zip
-        fail_on_unmatched_files: true
-        name: ${{ env.DEVICE_NAME }}-${{ env.DEVICE_TREE_BRANCH }}-${{ steps.devtree_commit.outputs.LATEST_COMMIT }}
+          fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox-R*.img
+          fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox-R*.zip
+        fail_on_unmatched_files: false
+        name: ${{ env.DEVICE_NAME }}-${{ env.DEVICE_TREE_BRANCH }}-${{ steps.devtree_commit.outputs.commit }}
         tag_name: ${{ github.run_id }}
         body: |
           Manifest: ${{ env.MANIFEST_BRANCH }}
           Device: ${{ env.DEVICE_NAME }}
-          Target: ${{ env.BUILD_TARGET }}
           Device tree branch: ${{ env.DEVICE_TREE_BRANCH }}
-          Device tree commit: [${{ steps.devtree_commit.outputs.LATEST_COMMIT }}](${{ env.DEVICE_TREE_URL }}/tree/${{ steps.devtree_commit.outputs.LATEST_COMMIT }})
-          bootable/recovery commit: [${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }}](https://gitlab.com/OrangeFox/bootable/Recovery/tree/${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }})
+          Device tree commit: [${{ steps.devtree_commit.outputs.commit }}](${{ env.DEVICE_TREE_URL }}/tree/${{ steps.devtree_commit.outputs.commit }})
+          bootable/recovery commit: [${{ steps.recovery_commit.outputs.commit }}](https://gitlab.com/OrangeFox/bootable/Recovery/tree/${{ steps.recovery_commit.outputs.commit }})
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Notify Release
+    - name: Notify
       if: success()
       run: |
-        RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${{ github.run_id }}"
-        DEVICE_TREE_BROWSE_URL="${{ env.DEVICE_TREE_URL }}/tree/${{ steps.devtree_commit.outputs.LATEST_COMMIT }}"
-        RECOVERY_BROWSE_URL="https://gitlab.com/OrangeFox/bootable/Recovery/tree/${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }}"
-        /tmp/send_msg.sh "📦 *Build complete!*\n🔗 [Download]($RELEASE_URL)\n🌲 Device tree branch: \`${{ env.DEVICE_TREE_BRANCH }}\`\n🌲 Device tree commit: [${{ steps.devtree_commit.outputs.LATEST_COMMIT }}]($DEVICE_TREE_BROWSE_URL)\n🔁 bootable/recovery commit: [${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }}]($RECOVERY_BROWSE_URL)"
+        /tmp/send_msg.sh "📦 *Build complete!*\n🔗 [Download](https://github.com/${{ github.repository }}/releases/tag/${{ github.run_id }})\n🌲 Device tree: [${{ steps.devtree_commit.outputs.commit }}](${{ env.DEVICE_TREE_URL }}/tree/${{ steps.devtree_commit.outputs.commit }})\n🔁 bootable/recovery: [${{ steps.recovery_commit.outputs.commit }}](https://gitlab.com/OrangeFox/bootable/Recovery/tree/${{ steps.recovery_commit.outputs.commit }})"
