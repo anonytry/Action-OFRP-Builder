@@ -179,7 +179,7 @@ jobs:
             tail -30 /tmp/zt.log
             rc=1
           fi
-          md5sum "$z" | tee "$z.md5"
+          ( cd "$(dirname "$z")" && md5sum "$(basename "$z")" | tee "$(basename "$z").md5" )
         done
         [ $rc -eq 0 ] || { /tmp/send_msg.sh "❌ Flashable zip failed \`unzip -t\`"; exit 1; }
 
