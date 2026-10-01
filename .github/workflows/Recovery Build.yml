@@ -82,7 +82,9 @@ jobs:
       uses: actions/setup-java@v6
       with:
         distribution: 'zulu'
-        java-version: '17'
+        java-version: |
+          17
+          8
 
     - name: Sync OrangeFox sources and minimal manifest
       run: |
@@ -133,6 +135,9 @@ jobs:
         set -e
 
         export ALLOW_MISSING_DEPENDENCIES=true
+        # OrangeFox signs the flashable zip with the java 8 zipsigner, and
+        # leaves it unsigned (unusable for a dirty flash) without a java 8
+        export FOX_JAVA8_PATH="$JAVA_HOME_8_X64/bin/java"
         lunch ${{ env.MAKEFILE_NAME }}
 
         if ! mka adbd ${{ env.BUILD_TARGET }}image -j$(nproc --all); then
