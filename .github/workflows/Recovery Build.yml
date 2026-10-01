@@ -93,6 +93,21 @@ jobs:
         cd sync
         ./orangefox_sync.sh --branch ${{ env.MANIFEST_BRANCH }} --path "$GITHUB_WORKSPACE/fox_${{ env.MANIFEST_BRANCH }}"
 
+    - name: Prefer the classic zip signer
+      run: |
+        # zipsigner-3.0.jar rebuilds the whole archive through libziparchive,
+        # which has produced zips whose recovery.img entry fails to inflate
+        # with "invalid code lengths set". The classic path (signapk +
+        # zipadjust + minsignapk) only shifts offsets and injects the
+        # signature block, so it never touches the compressed payload.
+        SIG="fox_${{ env.MANIFEST_BRANCH }}/vendor/recovery/signature"
+        if [ -f "$SIG/zipsigner-3.0.jar" ]; then
+          mv "$SIG/zipsigner-3.0.jar" "$SIG/zipsigner-3.0.jar.disabled"
+          echo "disabled zipsigner-3.0.jar, OrangeFox falls back to signapk + zipadjust"
+        else
+          echo "zipsigner-3.0.jar not present, nothing to do"
+        fi
+
     - name: Get bootable/recovery commit
       id: recovery_commit
       run: |
@@ -149,6 +164,25 @@ jobs:
       if: failure()
       run: /tmp/send_msg.sh "❌ Build failed for \`${{ env.DEVICE_NAME }}\` (\`${{ env.MANIFEST_BRANCH }}\`)\n🔗 [Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
 
+    - name: Verify the flashable zip
+      run: |
+        set +e
+        D="fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}"
+        rc=0
+        shopt -s nullglob
+        for z in "$D"/OrangeFox-*.zip; do
+          echo "### $(basename "$z"): $(stat -c%s "$z") bytes"
+          if unzip -t "$z" > /tmp/zt.log 2>&1; then
+            echo "### zip integrity: OK"
+          else
+            echo "### zip integrity: CORRUPT"
+            tail -30 /tmp/zt.log
+            rc=1
+          fi
+          md5sum "$z" | tee "$z.md5"
+        done
+        [ $rc -eq 0 ] || { /tmp/send_msg.sh "❌ Flashable zip failed \`unzip -t\`"; exit 1; }
+
     - name: Check the output directory
       run: ls -l "fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/"
 
@@ -159,6 +193,7 @@ jobs:
           fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/recovery.img
           fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox-R*.img
           fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox-R*.zip
+          fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox-R*.zip.md5
         fail_on_unmatched_files: false
         name: ${{ env.DEVICE_NAME }}-${{ env.DEVICE_TREE_BRANCH }}-${{ steps.devtree_commit.outputs.commit }}
         tag_name: ${{ github.run_id }}
