@@ -92,8 +92,8 @@ jobs:
     - name: Sync OrangeFox sources and minimal manifest
       run: |
         /tmp/send_msg.sh "🌐 Syncing OrangeFox sources..."
-        # fox_16.0 now pins Files/NAS projects that are private. The recovery
-        # build does not reference them, so drop them from the sync.
+        # fox_16.0 pins Files/NAS and unneeded external projects that are private
+        # or conflict with in-tree recovery modules (external/util-linux vs bootable/recovery/libblkid).
         cat > /tmp/sky_build.xml <<'XML'
         <?xml version="1.0" encoding="UTF-8"?>
         <manifest>
@@ -101,6 +101,7 @@ jobs:
           <remove-project name="external/libfuse3" />
           <remove-project name="external/rclone" />
           <remove-project name="external/fox-go" />
+          <remove-project name="external/util-linux" />
         </manifest>
         XML
         git clone --depth=1 ${{ env.SYNC_URL }} sync
